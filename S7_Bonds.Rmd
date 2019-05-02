@@ -1,0 +1,214 @@
+---
+title: "S7_bonds"
+output: html_notebook
+---
+План:
+1. Данные по облигации и кривой доходности
+2. Интерполяция кривой
+3. Нахождение риск-параметров
+
+#0. Настройка
+```{r, warning=FALSE}
+libs <- c(
+  "readxl",
+  "dplyr",
+  "stringr",
+  "ggplot2"
+  )
+
+install_libs <- libs[!(libs %in% installed.packages())]
+for(lib in install_libs) install.packages(lib, dependences = TRUE)
+sapply(libs, require, character = TRUE)
+Sys.setlocale("LC_CTYPE", "russian")
+```
+#1. Данные
+
+Отбор облигаций: 
+https://www.rusbonds.ru/compare.asp 
+https://bonds.finam.ru/trades/today/ 
+
+Источники:
+- Информация и календарь выплат: Rusbonds
+https://www.rusbonds.ru/tquotes.asp?tool=151777
+- Кривая бескупонной доходности: Банк России
+http://cbr.ru/hd_base/zcyc_params/
+
+Исходники: 
+- вставлены руками в Excel (как текст)
+- запятые заменены на точки
+- столбцы переназваны на английский
+- убраны "-"
+
+```{r}
+path <- "S7_Bonds.xlsx"
+
+#Облигация 
+d_info <- read_excel(path, sheet = 'Info')#Общие сведения
+d_cf <- read_excel(path, sheet = 'Calendar')#Купоны
+d_back <- read_excel(path, sheet = 'Buyback')#Выкуп
+d_trade <- read_excel(path, sheet = 'Trade')#Котировки
+
+#бескупонная кривая
+d_curve <- read_excel(path, sheet = 'Curve')
+```
+
+Облигация для анализа
+```{r}
+d_info %>% filter(Key == "Наименование:") %>% select(Value)
+```
+
+
+#2. Интерполяция 
+Срочности (в годах)
+```{r}
+t = as.numeric(names(d_curve)[2:length(d_curve)])
+t
+```
+Бескупонная ставка (в % годовых)
+```{r}
+date_txt = "26.04.2019"
+rf <- d_curve %>% filter(Date == date_txt)
+rf <- as.numeric(rf[1,2:length(rf)])
+rf
+```
+Интерполяция бескупонной кривой
+```{r}
+curve_fit <- loess(rf ~ t)
+curve <- function(tau){predict(curve_fit, tau)}
+curve(30)#значение кривой в t=30 лет
+```
+
+```{r}
+df_pic <- data.frame(t = t,rf = rf)
+
+library(ggplot2)
+sp <- ggplot(data=df_pic, aes(x=t, y=rf)) + geom_point() + geom_smooth()
+sp
+```
+
+#3. Оценка доходности
+
+Номинал облигации - сумма долга по 1 облигации (в рублях)
+```{r}
+d_info %>% filter(Key == "Номинал:") %>% select(Value) -> nom
+nom <- as.numeric(str_extract_all(nom$Value, "[0-9]+")[[1]])
+nom
+```
+
+Найдём текущую цену (в % от номинала)
+```{r}
+d_trade %>% filter(Place == "МБ Облигации-о") %>% select(Wprice) -> price
+price <- (price$Wprice)
+price
+```
+
+НКД = накопленный купонный доход
+
+Текущая дата
+```{r}
+date <- as.Date(date_txt, format = "%d.%m.%Y")
+date_next_coupon <- as.Date(d_cf[1,"Date"]$Date, format = "%d.%m.%Y")
+date_diff <- (date_next_coupon - date)
+date_diff
+```
+
+
+```{r}
+coupon_period <- d_cf[1,"Period"]$Period
+coupon <- d_cf[1,"Sum"]$Sum
+coupon
+```
+НКД
+```{r}
+days_accrued <- coupon_period - as.numeric(date_diff)
+ai <- (days_accrued/coupon_period)*coupon
+ai
+```
+
+```{r}
+d_cf$Date <- as.Date(d_cf$Date, format = "%d.%m.%Y")
+```
+
+
+```{r}
+buyback_date <- as.Date(d_back$Date, format = "%d.%m.%Y")
+maturity_date <- d_cf$Date[length(d_cf$Date)]
+if(is.na(buyback_date)){
+  last_date <- maturity_date
+} else{
+  last_date <- buyback_date
+}
+last_date == buyback_date
+```
+```{r}
+last_date
+```
+
+```{r}
+d_cf %>% filter(Date<=last_date) ->d_cf_final
+d_cf_final
+```
+```{r}
+bond_tau <- as.numeric(d_cf_final$Date-date)/365
+bond_tau
+```
+```{r}
+curve(bond_tau)
+```
+```{r}
+flows_1 <- d_cf_final$Sum
+flows <- flows_1
+flows[length(flows)] <- flows_1[length(flows_1)]+nom
+flows
+```
+```{r}
+dirty_price <- price/100*nom+ai
+dirty_price
+```
+
+
+```{r}
+ytm_target <- function(y){sum(flows/((1+(y/100))^bond_tau))-(dirty_price)}
+ytm <- uniroot(ytm_target, interval = c(0,20), tol = 0.0001)$root
+ytm
+```
+Доходность к погашению (в % годовых)
+```{r} 
+d_trade %>% filter(Place == "МБ Облигации-о") %>% select(Yield) -> yield
+yield <- (yield$Yield)
+yield
+```
+```{r}
+last_tau <- (bond_tau)[length(flows)]
+sp +  geom_point(aes(x = last_tau, y=ytm), colour="red")
+```
+
+
+```{r}
+risk_free <- curve((bond_tau)[length(flows)])
+risk_free
+```
+
+
+
+G-spread
+```{r}
+g_spread <- ytm - risk_free
+g_spread
+```
+
+Z-spread
+```{r}
+zspread_target <- function(z){sum(flows/((1+((z+curve(bond_tau))/100))^bond_tau))-(dirty_price)}
+zspread <- uniroot(zspread_target, interval = c(0,100))$root
+zspread
+```
+```{r}
+macaulay_dur <- (1/(price/100*nom))*sum(bond_tau*flows/(1+ytm/100)^bond_tau)
+macaulay_dur
+```
+```{r}
+duration <- macaulay_dur/(1+ytm/100)
+duration
+```
+

@@ -1,0 +1,259 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+План
+
+1. Загрузка данных с WEO (IMF)
+2. Фильтрация и обработка
+3. Приведение данных к виду tidy data
+4. Оценка зависимости ВВП на душу населения и отклонения курса от ППС
+
+Библиотеки
+```{r}
+libs <- c('dplyr','ggplot2', 'tidyr')
+install_libs <- libs[!(libs %in% installed.packages())]
+for(lib in install_libs) install.packages(lib, dependences = TRUE)
+sapply(libs, require, character = TRUE)
+```
+
+1. Скачать последний WEO
+
+#1. Загрузка данных
+```{r}
+file_url <- 'https://www.imf.org/external/pubs/ft/weo/2019/01/weodata/WEOApr2019all.xls'
+```
+
+Загрузка датасета с сайта МВФ
+```{r}
+download.file(file_url, destfile = "data.txt")
+d0 <- read.table('data.txt',
+                 header = TRUE, 
+                 encoding="Windows-1252", 
+                 fill = TRUE, sep =  "\t", quote = "", dec =","
+                 )
+```
+```{r}
+d0[8732,]
+d0 <- d0[-8732,]
+```
+
+```{r}
+colnames(d0)
+```
+
+
+```{r}
+d0$Country %>% unique
+```
+
+
+```{r}
+str(d0)
+```
+
+#2. Фильтрация и обработка
+```{r}
+num_cols <- c(paste0('X',1980:1999), paste0('X',2000:2024))
+```
+
+```{r}
+d0[, num_cols] <- apply(d0[, num_cols], 2, function(x) { 
+    gsub('"', "", x)
+    })
+
+d0[, num_cols] <- apply(d0[, num_cols], 2, function(x) { 
+    gsub(",", "", x)
+    })
+```
+
+https://stackoverflow.com/questions/3418128/how-to-convert-a-factor-to-integer-numeric-without-loss-of-information
+```{r}
+d0 %>% filter(Country == "Russia", WEO.Subject.Code == "NGDP") 
+```
+
+
+```{r}
+d1 <- d0
+```
+
+
+
+```{r}
+for(col in num_cols#[1:length(num_cols)]
+    ){
+  chr <- d1[col][, col]
+  num <- as.numeric(chr)
+  d1[col][, col] <- num
+}
+```
+```{r}
+d1 %>% filter(Country == "Russia", WEO.Subject.Code == "NGDP")
+```
+
+
+```{r}
+d1 %>% str
+```
+
+```{r}
+keeps <- c(c("Country", "WEO.Subject.Code"),num_cols)
+df <- d1[keeps]
+str(df)
+```
+
+
+#3. Tidy data
+
+Года- в строки
+```{r}
+df_g <- df %>% gather(Year, Value, X1980:X2024)
+```
+```{r}
+df %>% head
+```
+```{r}
+df_g %>% head
+```
+
+```{r}
+legend <- unique(d1[c("WEO.Subject.Code", "Subject.Descriptor")])
+```
+```{r}
+legend
+```
+
+
+```{r}
+str(df_g)
+```
+
+
+```{r}
+df_g$WEO.Subject.Code %>% unique
+```
+
+
+```{r}
+df_g<-df_g[!(df_g$WEO.Subject.Code==""),]
+
+
+```
+
+Строки в столбце WEO.Subject.Code - переводим в столбцы
+```{r}
+d <- df_g %>% spread(WEO.Subject.Code, Value)
+```
+```{r}
+head(df_g)
+```
+
+
+```{r}
+head(d)
+```
+
+
+```{r}
+d$Year <- (gsub('X', '', d$Year))
+d$Date <- as.Date(gsub('X', '', d$Year), forma = "%Y")
+```
+
+```{r}
+str(d)
+```
+
+
+
+```{r}
+d %>% select(NGDP, Year, Country) %>% filter(Year == 2017) %>% select(NGDP) -> ngdp17
+log(ngdp17$NGDP)%>% hist
+```
+
+
+Библиотека dplyr
+%>% - оператор вместо написания функции (Ctrl+Shift+M) - 
+То же самое, что filter(legend, ...)
+```{r}
+legend %>% filter(Subject.Descriptor == "Implied PPP conversion rate")
+```
+#4. Зависимость отклонения курса от курса по ППС и ВВП на душу населения
+Расчет показателей
+```{r}
+d$EXR = d$NGDP / d$NGDPD #ВВП в нацвалюте поделить на ВВП в долларах
+d$NGDPDPC_LOG = log(d$NGDPDPC) #ВВП на душу в долларах в текущих ценах
+d$NGDP_LOG = log(d$NGDPDPC/d$EXR) # ВВП в базовых ценах
+
+d$DEVPPP <- d$EXR / d$PPPEX -1 #отклонение от паритета
+```
+
+```{r}
+legend
+```
+
+```{r}
+dg <- d %>%
+  gather(key = "Variable", value = "Value", -c(Country, Year, Date))
+```
+```{r}
+str(dg)
+```
+```{r}
+dg1 <-  dg %>% filter(Country == "Russia", Variable == "EXR" | Variable == "PPPEX") %>% select(Date, Variable, Value)
+```
+
+```{r}
+head(dg1)
+```
+
+```{r}
+ggplot(dg1, 
+       aes(x = Date, y = Value, col = Variable)) + 
+  geom_line(aes(color = Variable), size = 1) 
+
+```
+
+```{r}
+legend
+```
+
+library dplyr  = data wrangling
+```{r}
+legend %>% filter(WEO.Subject.Code == 'NGDPDPC')
+```
+
+GDP per capita, current prices
+```{r}
+d_scatter <- d %>% filter(Year == 1994 | Year == 2018) %>% 
+  select(Country, NGDPDPC_LOG, DEVPPP, Year)
+ggplot(d_scatter, aes(x=NGDPDPC_LOG, y=DEVPPP, color = Year)) + geom_point() + geom_smooth(method = lm)
+```
+Линейная регрессия (паритета от логарифма ВВП на душу населения)
+
+DEVPPP~NGDPDPC_LOG - слева - зависимая переменная, справа факторы 
+```{r}
+model <- lm(DEVPPP~NGDPDPC_LOG, d %>% filter(Year == 2018))
+summary(model)
+```
+```{r}
+legend
+```
+
+
+```{r}
+model <- lm(DEVPPP~NGDPDPC_LOG+PCPI, d %>% filter(Year == 2018))
+summary(model)
+```
+
+
+```{r}
+d_scatter <- d %>% filter(Year == 1994 | Year == 2018) %>% 
+  select(Country, NGDP_LOG, DEVPPP, Year)
+ggplot(d_scatter, aes(x=NGDP_LOG, y=DEVPPP, color = Year)) + geom_point() + geom_smooth(method = lm)
+```
+
+```{r}
+model <- lm(DEVPPP~NGDP_LOG, d %>% filter(Year == 2018))
+summary(model)
+```

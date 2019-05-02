@@ -1,0 +1,68 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+libs <- c(
+  "readxl",
+  "dplyr",
+  "ggplot2"
+  )
+
+install_libs <- libs[!(libs %in% installed.packages())]
+for(lib in install_libs) install.packages(lib, dependences = TRUE)
+sapply(libs, require, character = TRUE)
+```
+
+```{r}
+path <- "allmonth.xls"
+
+d <- read_excel(path, sheet = 'rec_prob')
+```
+
+```{r}
+str(d)
+```
+
+
+```{r}
+colnames(d) <- c(
+  
+  "Date","10y", "3m", "3m_bond", "Spread", "Prob", "Recession"
+)
+```
+```{r}
+str(d)
+```
+```{r}
+d1 <- d
+d1$Spread <- d$Spread
+d1$Recession <- c(d$Recession[13:length(d$Recession)], rep(0,12))
+```
+```{r}
+d1 %>% filter(Date<= '2009-12-31')
+```
+
+
+```{r}
+d$Recession[2:length(d$Recession)] %>% length
+```
+
+```{r}
+model <- glm(Recession ~ Spread, data = d1 %>% filter(Date<= '2009-12-31'), family = binomial(link = "probit"))
+summary(model)
+```
+```{r}
+as.xts()
+```
+
+```{r}
+dolm <- function(x) coef(lm(USDZAR ~ ., data = as.data.frame(x))))
+rollapplyr(fxr, 62, dolm, by.column = FALSE)
+```
+
